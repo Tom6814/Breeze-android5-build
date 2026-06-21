@@ -111,6 +111,7 @@ dependency_overrides:
   desktop_webview_linux:
     path: third_party/desktop_webview_linux
   file_selector_android: 0.5.1+17
+  image_picker_android: 0.8.12+21
 
 dev_dependencies:
   # 测试与规范
