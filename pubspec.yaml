@@ -118,8 +118,6 @@ dev_dependencies:
   # 测试与规范
   flutter_test:
     sdk: flutter
-  integration_test:
-    sdk: flutter
   flutter_lints: ^6.0.0 # 规范: 官方 Lint 规则
 
   # 代码生成
