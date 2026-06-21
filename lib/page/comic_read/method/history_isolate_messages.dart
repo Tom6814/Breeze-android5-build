@@ -1,0 +1,14 @@
+// 消息基类
+
+abstract class HistoryMessage {}
+
+// 更新历史的消息，携带纯数据
+class UpdateHistoryMessage extends HistoryMessage {
+  final dynamic data;
+  final String from;
+
+  UpdateHistoryMessage(this.data, this.from);
+}
+
+// 关闭 Isolate 的消息
+class ShutdownMessage extends HistoryMessage {}

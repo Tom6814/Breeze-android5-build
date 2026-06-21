@@ -1,0 +1,100 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+.idea/
+.vscode/settings.json
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+/target/
+
+# FVM Version Cache
+.fvm/
+
+.crashlytics
+# .env.proxy
+
+script/bin/
+windows-installer/src-tauri/resources
+
+# Flatpak related
+build-flatpak/
+repo-flatpak/
+*.flatpak
+.flatpak-builder/
+GPUCache/
+sentry.properties
+.sentry-native
+# rquickjs_playground/
+rust/js/jm_http_bundle/node_modules/
+rust/src/js/jm_http.bundle.cjs
+rust/js/jm_http_bundle/package-lock.json
+
+.opencode/
+.you/
+# Third-party local clones
+third_party/llrt/
+third_party/Aidoku/
+
+node_modules
+
+# RealSR large binaries / downloaded assets
+asset/realsr/
+android/app/src/main/jniLibs/
+breeze-realsr-assets-*.tgz
+realsr-assets-npm/dist/
+realsr-assets-npm/asset/
+realsr-assets-npm/android/
+
+# RealSR desktop CLI
+realsr-win/
+realsr-linux/
+realsr-macos/
+
+# Android NCNN runtime model package (upload to release hosting, do not commit)
+realsr-android.7z
+
+# Android NCNN native build dependencies
+third_party/android_ncnn_deps/
+
+# ncnn source (cloned during static Android build)
+third_party/ncnn-src/

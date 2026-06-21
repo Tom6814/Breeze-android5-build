@@ -1,0 +1,16 @@
+android/key.properties filter=git-crypt diff=git-crypt
+android/Breeze-key.keystore filter=git-crypt diff=git-crypt
+
+# Normalize all text files to LF in repository
+* text=auto eol=lf
+
+# Keep Windows shell scripts as CRLF in working tree
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Mark binary files and skip EOL conversion
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.ttf binary

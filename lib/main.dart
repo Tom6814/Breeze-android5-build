@@ -1,0 +1,770 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:ffi';
+import 'dart:io';
+
+import 'package:desktop_webview_linux/desktop_webview_linux.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:dio/dio.dart';
+import 'package:dynamic_color/dynamic_color.dart';
+import 'package:event_bus/event_bus.dart';
+import 'package:extended_image/extended_image.dart' as http;
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_socks_proxy/socks_proxy.dart';
+import 'package:logger/logger.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
+import 'package:tray_manager/tray_manager.dart';
+import 'package:window_manager/window_manager.dart';
+import 'package:worker_manager/worker_manager.dart';
+import 'package:zephyr/config/global/global.dart';
+import 'package:zephyr/config/global/global_setting.dart';
+import 'package:zephyr/cubit/plugin_registry_cubit.dart';
+import 'package:zephyr/object_box/model.dart';
+import 'package:zephyr/object_box/object_box.dart';
+import 'package:zephyr/src/rust/api/qjs.dart';
+import 'package:zephyr/src/rust/api/simple.dart';
+import 'package:zephyr/src/rust/api/system.dart' as rust_system;
+import 'package:zephyr/util/debouncer.dart';
+import 'package:zephyr/util/desktop/custom_title_bar.dart';
+import 'package:zephyr/util/desktop/desktop_fullscreen_controller.dart';
+import 'package:zephyr/util/desktop/intent.dart';
+import 'package:zephyr/util/desktop/native_window.dart';
+import 'package:zephyr/util/desktop/system_tray.dart';
+import 'package:zephyr/util/desktop/window_logic.dart';
+import 'package:zephyr/util/error_filter.dart';
+import 'package:zephyr/util/font/font_profile.dart';
+import 'package:zephyr/util/get_path.dart';
+import 'package:zephyr/util/manage_cache.dart';
+import 'package:zephyr/util/router/router.dart';
+import 'package:zephyr/util/rust_loader.dart';
+
+late final ObjectBox objectbox;
+
+// 定义全局Dio实例
+final dio = Dio();
+final appRouter = AppRouter();
+
+// 全局事件总线实例
+EventBus eventBus = EventBus();
+
+var logger = Logger(
+  printer: TersePrettyPrinter(),
+  // filter: MyAlwaysLogFilter(),
+  // output: RemoteOutput(),
+);
+
+List<String> cfIpList = [];
+
+final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+final navigatorKey = GlobalKey<NavigatorState>();
+
+class AppScrollBehavior extends MaterialScrollBehavior {
+  const AppScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+    ...super.dragDevices,
+    PointerDeviceKind.mouse,
+  };
+}
+
+class RemoteOutput extends LogOutput {
+  final String url;
+
+  RemoteOutput(this.url);
+
+  @override
+  void output(OutputEvent event) {
+    _sendToServer(event.lines.join('\n'), event.level);
+  }
+
+  Future<void> _sendToServer(String message, Level level) async {
+    try {
+      await http.post(
+        Uri.parse(url),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'level': level.name, 'message': '\n$message'}),
+      );
+    } catch (e) {
+      debugPrint(e.toString());
+    }
+  }
+}
+
+class MyAlwaysLogFilter extends LogFilter {
+  @override
+  bool shouldLog(LogEvent event) => true; // 强制通过所有日志
+}
+
+Future<void> main(List<String> args) async {
+  // 1. 基础初始化
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // desktop_webview_linux 必需的标题栏子进程入口
+  // 不添加会导致 Linux 下 WebView 窗口关闭时 segfault 崩溃
+  if (!kIsWeb && Platform.isLinux && runWebViewTitleBarWidget(args)) {
+    return;
+  }
+
+  const sentryDsn = String.fromEnvironment('sentry_dsn', defaultValue: '');
+
+  if (sentryDsn.isEmpty) {
+    // 1. 如果是调试模式，配置 logger 捕获全局错误
+    if (kDebugMode || sentryDsn.isEmpty) {
+      // 捕获 Flutter 框架层错误（如 Widget 构建中的异常）
+      FlutterError.onError = (FlutterErrorDetails details) {
+        logger.e(
+          "Flutter Framework Error",
+          error: details.exception,
+          stackTrace: details.stack,
+        );
+      };
+
+      // 捕获异步错误和底层错误（如 Future.error, Timer 等）
+      PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
+        logger.e("Async/Platform Error", error: error, stackTrace: stack);
+        return true; // 表示错误已被处理
+      };
+    }
+
+    try {
+      // 2. 执行业务初始化
+      final (globalSettingCubit, pluginRegistryCubit) = await _initServices();
+
+      runApp(
+        MultiBlocProvider(
+          providers: [
+            BlocProvider.value(value: globalSettingCubit),
+            BlocProvider.value(value: pluginRegistryCubit),
+          ],
+          child: const MyApp(),
+        ),
+      );
+    } catch (e, stack) {
+      // 捕获初始化阶段（_initServices）可能抛出的异常
+      if (kDebugMode || sentryDsn.isEmpty) {
+        logger.e("App Setup Failed", error: e, stackTrace: stack);
+      }
+    }
+
+    return;
+  }
+
+  // 2. 使用 Sentry 包装整个应用生命周期
+  await SentryFlutter.init(
+    (options) {
+      options.dsn = sentryDsn;
+
+      // 开启默认的个人信息采集（IP/Header），有助于分析用户分布
+      options.sendDefaultPii = true;
+
+      // 仅在调试模式下打印 Sentry 内部日志
+      options.enableLogs = kDebugMode;
+
+      // --- Sentry Sponsored Business 特权配置 ---
+      // 性能追踪采样率
+      options.tracesSampleRate = 1.0;
+
+      // 性能剖析采样率
+      // ignore: experimental_member_use
+      options.profilesSampleRate = 1.0;
+
+      // Android 上暂时关闭 Replay，规避原生侧生命周期卡顿/ANR 风险。
+      if (Platform.isAndroid) {
+        options.replay.sessionSampleRate = 0.0;
+        options.replay.onErrorSampleRate = 0.0;
+      } else {
+        // 会话回放设置：平时抽样 10%，遇到错误时 100% 录制
+        options.replay.sessionSampleRate = 0.1;
+        options.replay.onErrorSampleRate = 1.0;
+      }
+
+      // 附加线程信息和堆栈，增强原生层（Rust/C++）错误分析
+      options.attachThreads = true;
+      options.attachStacktrace = true;
+    },
+    appRunner: () async {
+      try {
+        final (globalSettingCubit, pluginRegistryCubit) = await _initServices();
+
+        await addArchitectureTagsToSentry();
+
+        runApp(
+          SentryWidget(
+            child: MultiBlocProvider(
+              providers: [
+                BlocProvider.value(value: globalSettingCubit),
+                BlocProvider.value(value: pluginRegistryCubit),
+              ],
+              child: MyApp(),
+            ),
+          ),
+        );
+      } catch (exception, stackTrace) {
+        await Sentry.captureException(exception, stackTrace: stackTrace);
+      }
+    },
+  );
+}
+
+Future<(GlobalSettingCubit, PluginRegistryCubit)> _initServices() async {
+  // 初始化rust
+  await initRustLib();
+
+  // 初始化工作线程
+  await workerManager.init(isolatesCount: Platform.numberOfProcessors);
+
+  // 关掉rust端，主要是anyhow的堆栈调用信息
+  enableStacktrace(enabled: false);
+
+  enableRustLog(enabled: kDebugMode);
+
+  if (kDebugMode) {
+    setQjsErrorStackEnabled(enabled: true);
+    // 配置http代理，方便开发测试
+    await _tryApplyHttpProxyFromEnv();
+  } else {
+    setQjsErrorStackEnabled(enabled: false);
+  }
+
+  // 初始化前台任务
+  FlutterForegroundTask.initCommunicationPort();
+
+  // 重采样触控刷新率
+  GestureBinding.instance.resamplingEnabled = true;
+
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarDividerColor: Colors.transparent,
+      statusBarColor: Colors.transparent,
+    ),
+  );
+
+  final isWin = Platform.isWindows;
+  final cache = PaintingBinding.instance.imageCache;
+
+  // 设置图片缓存数量和内存占用大小（桌面端设置的稍微大点）
+  cache.maximumSizeBytes = 200 * 1024 * 1024 * (isWin ? 3 : 1);
+  cache.maximumSize = 50 * (isWin ? 3 : 1);
+
+  // 如果是手机的话就固定为只能使用横屏模式
+  if (!isTabletWithOutContext()) {
+    await SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+  }
+
+  objectbox = await ObjectBox.create();
+  final setting = objectbox.userSettingBox.get(1);
+  if (setting == null) {
+    objectbox.userSettingBox.put(UserSetting());
+  }
+
+  final globalSettingCubit = GlobalSettingCubit();
+  await globalSettingCubit.initBox();
+  await FontProfileController.instance.init();
+
+  final pluginRegistryCubit = PluginRegistryCubit();
+
+  if (globalSettingCubit.state.needCleanCache) {
+    await clearCache(await getCachePath());
+  }
+
+  if (globalSettingCubit.state.socks5Proxy.isNotEmpty) {
+    final proxy = globalSettingCubit.state.socks5Proxy;
+    SocksProxy.initProxy(proxy: 'SOCKS5 $proxy');
+    await setSocks5Proxy(proxy: proxy);
+  }
+
+  // 设置日志转发（包含flutter和qjs的日志）
+  final logAddress = globalSettingCubit.state.logAddress;
+
+  if (logAddress.isNotEmpty) {
+    if (!kDebugMode) {
+      logger = Logger(
+        printer: TersePrettyPrinter(),
+        filter: MyAlwaysLogFilter(),
+        output: RemoteOutput(logAddress),
+      );
+    }
+    setLogHttpForward(url: logAddress);
+    setQjsErrorStackEnabled(enabled: true);
+  }
+
+  // 关掉缓存定时清理(rust端)
+  setHostCacheGcEnabled(enabled: false);
+
+  setTlsVerifyEnabled(enabled: false);
+
+  return (globalSettingCubit, pluginRegistryCubit);
+}
+
+Future<void> _tryApplyHttpProxyFromEnv() async {
+  if (!kDebugMode) return;
+
+  final rawProxy = await _readProxyFromEnvAsset();
+  if (rawProxy == null || rawProxy.isEmpty) return;
+
+  final proxyUrl =
+      rawProxy.startsWith('http://') || rawProxy.startsWith('https://')
+      ? rawProxy
+      : 'http://$rawProxy';
+
+  final reachable = await _probeProxyWithTimeout(proxyUrl);
+  if (!reachable) return;
+
+  await setHttpProxy(proxy: proxyUrl);
+}
+
+Future<String?> _readProxyFromEnvAsset() async {
+  try {
+    final content = await rootBundle.loadString('.env.proxy');
+    for (final rawLine in const LineSplitter().convert(content)) {
+      final line = rawLine.trim();
+      if (line.isEmpty || line.startsWith('#')) continue;
+      if (!line.startsWith('proxy=')) continue;
+      final value = line.substring('proxy='.length).trim();
+      if (value.isNotEmpty) return value;
+    }
+  } catch (_) {
+    return null;
+  }
+  return null;
+}
+
+Future<bool> _probeProxyWithTimeout(String proxyUrl) async {
+  HttpClient? client;
+  try {
+    client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 3)
+      ..findProxy = (_) => 'PROXY ${Uri.parse(proxyUrl).authority}';
+
+    final request = await client
+        .getUrl(Uri.parse('http://www.gstatic.com/generate_204'))
+        .timeout(const Duration(seconds: 3));
+    request.followRedirects = false;
+    final response = await request.close().timeout(const Duration(seconds: 3));
+    await response.drain();
+    return response.statusCode >= 200 && response.statusCode < 500;
+  } catch (_) {
+    return false;
+  } finally {
+    client?.close(force: true);
+  }
+}
+
+Future<void> addArchitectureTagsToSentry() async {
+  try {
+    final is64Bit = sizeOf<Pointer>() == 8;
+    final appArchitecture = is64Bit ? '64-bit' : '32-bit';
+
+    String deviceSupportedAbis = 'unknown';
+
+    if (Platform.isAndroid) {
+      final androidInfo = await DeviceInfoPlugin().androidInfo;
+      deviceSupportedAbis = androidInfo.supportedAbis.join(', ');
+    } else if (Platform.isIOS) {
+      final iosInfo = await DeviceInfoPlugin().iosInfo;
+      deviceSupportedAbis = 'arm64 (${iosInfo.utsname.machine})';
+    } else if (Platform.isWindows) {
+      deviceSupportedAbis =
+          Platform.environment['PROCESSOR_ARCHITECTURE'] ?? 'unknown';
+    } else if (Platform.isLinux) {
+      try {
+        final result = Process.runSync('uname', ['-m']);
+        deviceSupportedAbis = result.stdout.toString().trim();
+      } catch (_) {
+        deviceSupportedAbis = 'unknown';
+      }
+    } else if (Platform.isMacOS) {
+      final macInfo = await DeviceInfoPlugin().macOsInfo;
+      deviceSupportedAbis = macInfo.arch;
+    }
+
+    Sentry.configureScope((scope) {
+      scope.setTag('app_runtime_arch', appArchitecture);
+      scope.setTag('device_supported_abis', deviceSupportedAbis);
+
+      scope.addBreadcrumb(
+        Breadcrumb(
+          message:
+              'Architecture Info - App: $appArchitecture, Device: $deviceSupportedAbis',
+          category: 'system.architecture',
+        ),
+      );
+    });
+  } catch (e, stack) {
+    await Sentry.captureException(e, stackTrace: stack);
+  }
+}
+
+class MyApp extends StatefulWidget with WindowListener {
+  const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> with WindowListener, TrayListener {
+  @override
+  void initState() {
+    super.initState();
+    if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+      windowManager.addListener(this);
+      _init();
+      WindowLogic.initWindow(context).then((_) {
+        windowManager.setPreventClose(true);
+      });
+    }
+    trayManager.addListener(this);
+    initSystemTray();
+
+    // 启动命名管道监听，用于接收外部退出信号（仅 Windows）
+    if (Platform.isWindows) {
+      rust_system.startShutdownListener().listen((shouldExit) {
+        if (shouldExit) {
+          _performGracefulExit();
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+      windowManager.removeListener(this);
+      trayManager.removeListener(this);
+    }
+    super.dispose();
+  }
+
+  @override
+  void onWindowResized() {
+    super.onWindowResized();
+    WindowLogic.saveWindowState(context);
+  }
+
+  @override
+  void onWindowMoved() {
+    super.onWindowMoved();
+    WindowLogic.saveWindowState(context);
+  }
+
+  @override
+  void onWindowMaximize() {
+    super.onWindowMaximize();
+    WindowLogic.saveWindowStateImmediately(context);
+  }
+
+  @override
+  void onWindowUnmaximize() {
+    super.onWindowUnmaximize();
+    WindowLogic.saveWindowStateImmediately(context);
+  }
+
+  /// 立即隐藏窗口再退出，让用户感知不到 Dart VM 清理的延迟
+  Future<void> _forceExit() async {
+    await WindowLogic.saveWindowStateImmediately(context);
+    // 强杀，降低延迟
+    // nuclearKillProcess();
+    if (Platform.isWindows) {
+      NativeWindow.hide(); // 同步 Win32 调用，零延迟
+    } else {
+      windowManager.hide(); // 其他桌面平台
+    }
+    objectbox.close();
+    nuclearKillProcess();
+  }
+
+  @override
+  void onWindowClose() async {
+    final closeBehavior = await WindowLogic.loadCloseBehavior();
+    switch (closeBehavior) {
+      case DesktopCloseBehavior.hide:
+        await _hideWindow();
+        return;
+      case DesktopCloseBehavior.close:
+        await _forceExit();
+        return;
+      case DesktopCloseBehavior.ask:
+        break;
+    }
+
+    final dialogContext = appRouter.navigatorKey.currentContext;
+    if (dialogContext == null || !dialogContext.mounted) {
+      await _forceExit();
+      return;
+    }
+    showDialog(
+      context: dialogContext,
+      builder: (context) {
+        var rememberChoice = false;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('提示'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('隐藏到托盘或关闭程序'),
+                  const SizedBox(height: 8),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: const Text('记住我的选择'),
+                    value: rememberChoice,
+                    onChanged: (value) {
+                      setDialogState(() {
+                        rememberChoice = value ?? false;
+                      });
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  child: const Text('取消'),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                  },
+                ),
+                TextButton(
+                  child: const Text('关闭'),
+                  onPressed: () async {
+                    Navigator.of(context).pop();
+                    if (rememberChoice) {
+                      await WindowLogic.saveCloseBehavior(
+                        DesktopCloseBehavior.close,
+                      );
+                    }
+                    await _forceExit();
+                  },
+                ),
+                TextButton(
+                  child: const Text('隐藏'),
+                  onPressed: () async {
+                    Navigator.of(context).pop();
+                    if (rememberChoice) {
+                      await WindowLogic.saveCloseBehavior(
+                        DesktopCloseBehavior.hide,
+                      );
+                    }
+                    await _hideWindow();
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// 隐藏窗口到任务栏托盘，不退出程序
+  Future<void> _hideWindow() async {
+    await WindowLogic.saveWindowStateImmediately(context);
+    if (Platform.isWindows) {
+      NativeWindow.hide();
+    } else {
+      windowManager.hide();
+    }
+  }
+
+  Future<void> _performGracefulExit() async {
+    await _forceExit();
+  }
+
+  @override
+  void onWindowFocus() {
+    super.onWindowFocus();
+    setState(() {});
+  }
+
+  @override
+  void onTrayIconMouseDown() {
+    NativeWindow.show();
+  }
+
+  @override
+  void onTrayIconRightMouseDown() {
+    trayManager.popUpContextMenu();
+  }
+
+  @override
+  void onTrayMenuItemClick(MenuItem menuItem) {
+    if (menuItem.key == 'show_window') {
+      NativeWindow.show();
+    } else if (menuItem.key == 'exit_app') {
+      // 真正退出：清理资源后退出
+      _performGracefulExit();
+    }
+  }
+
+  void _init() async {
+    if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+      await windowManager.setPreventClose(true);
+      setState(() {});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: FontProfileController.instance,
+      builder: (context, _) {
+        final globalSettingState = context.watch<GlobalSettingCubit>().state;
+
+        return DynamicColorBuilder(
+          builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
+            ColorScheme lightColorScheme;
+            ColorScheme darkColorScheme;
+
+            if (globalSettingState.dynamicColor == true) {
+              lightColorScheme =
+                  lightDynamic ??
+                  ColorScheme.fromSeed(
+                    seedColor: globalSettingState.seedColor,
+                    brightness: Brightness.light,
+                  );
+              darkColorScheme =
+                  darkDynamic ??
+                  ColorScheme.fromSeed(
+                    seedColor: globalSettingState.seedColor,
+                    brightness: Brightness.dark,
+                  );
+            } else {
+              final primary = globalSettingState.seedColor;
+
+              lightColorScheme = ColorScheme.fromSeed(
+                seedColor: primary,
+                brightness: Brightness.light,
+              );
+              darkColorScheme = ColorScheme.fromSeed(
+                seedColor: primary,
+                brightness: Brightness.dark,
+              );
+            }
+
+            final isLinuxDesktop = !kIsWeb && Platform.isLinux;
+            const linuxFontFamily = 'Noto Sans CJK SC';
+            const linuxFontFamilyFallback = <String>[
+              'WenQuanYi Micro Hei',
+              'Droid Sans Fallback',
+            ];
+
+            TextTheme withConfiguredFonts(TextTheme base) {
+              var themed = base;
+              if (isLinuxDesktop) {
+                themed = themed.apply(
+                  fontFamily: linuxFontFamily,
+                  fontFamilyFallback: linuxFontFamilyFallback,
+                );
+              }
+              return FontProfileController.instance.applyToTextTheme(themed);
+            }
+
+            return MaterialApp.router(
+              routerConfig: appRouter.config(),
+              scrollBehavior: const AppScrollBehavior(),
+              builder: (context, child) {
+                Widget content = Actions(
+                  actions: <Type, Action<Intent>>{
+                    EscapeIntent: CallbackAction<EscapeIntent>(
+                      onInvoke: (intent) {
+                        appRouter.maybePop();
+                        return null;
+                      },
+                    ),
+                  },
+                  child: Shortcuts(
+                    shortcuts: <ShortcutActivator, Intent>{
+                      const SingleActivator(LogicalKeyboardKey.escape):
+                          const EscapeIntent(),
+                    },
+                    child: Focus(autofocus: true, child: child!),
+                  ),
+                );
+
+                content = Listener(
+                  onPointerDown: (PointerDownEvent event) {
+                    if (event.buttons & kBackMouseButton != 0) {
+                      appRouter.maybePop();
+                    }
+                  },
+                  child: content,
+                );
+
+                if (Platform.isWindows ||
+                    Platform.isLinux ||
+                    Platform.isMacOS) {
+                  return ValueListenableBuilder<bool>(
+                    valueListenable: desktopReaderFullscreenNotifier,
+                    builder: (context, isReaderFullscreen, _) {
+                      return Column(
+                        children: [
+                          if (!isReaderFullscreen) const CustomTitleBar(),
+                          Expanded(child: content),
+                        ],
+                      );
+                    },
+                  );
+                }
+                return content;
+              },
+              locale: globalSettingState.locale,
+              title: appName,
+              themeMode: globalSettingState.themeMode,
+              supportedLocales: const [Locale('en', 'US'), Locale('zh', 'CN')],
+              localizationsDelegates: const [
+                GlobalMaterialLocalizations.delegate,
+                GlobalWidgetsLocalizations.delegate,
+                GlobalCupertinoLocalizations.delegate,
+              ],
+              theme: ThemeData.light().copyWith(
+                primaryColor: lightColorScheme.primary,
+                colorScheme: lightColorScheme,
+                scaffoldBackgroundColor: lightColorScheme.surface,
+                cardColor: lightColorScheme.surfaceContainer,
+                chipTheme: ChipThemeData(
+                  backgroundColor: lightColorScheme.surface,
+                ),
+                canvasColor: lightColorScheme.surfaceContainer,
+                dialogTheme: DialogThemeData(
+                  backgroundColor: lightColorScheme.surfaceContainer,
+                ),
+                textTheme: withConfiguredFonts(ThemeData.light().textTheme),
+                primaryTextTheme: withConfiguredFonts(
+                  ThemeData.light().primaryTextTheme,
+                ),
+              ),
+              darkTheme: ThemeData.dark().copyWith(
+                scaffoldBackgroundColor: globalSettingState.isAMOLED
+                    ? Colors.black
+                    : darkColorScheme.surface,
+                tabBarTheme: const TabBarThemeData(
+                  dividerColor: Colors.transparent,
+                ),
+                colorScheme: darkColorScheme,
+                textTheme: withConfiguredFonts(ThemeData.dark().textTheme),
+                primaryTextTheme: withConfiguredFonts(
+                  ThemeData.dark().primaryTextTheme,
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
