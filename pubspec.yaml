@@ -60,7 +60,7 @@ dependencies:
   objectbox_flutter_libs: ^5.0.0 # 存储: ObjectBox 原生库
   json_annotation: ^4.12.0 # 模型: JSON 注解
   freezed_annotation: ^3.0.0 # 模型: Freezed 注解
-  file_selector: ^1.1.0 # 文件: 文件选择器
+  file_selector: 1.0.4 # 文件: 文件选择器，保持 Android 21 兼容
   shared_preferences: ^2.5.4 # 文件: 键值对存储器
 
   # 文件、媒体与平台能力
@@ -110,6 +110,7 @@ dependencies:
 dependency_overrides:
   desktop_webview_linux:
     path: third_party/desktop_webview_linux
+  file_selector_android: 0.5.1+17
 
 dev_dependencies:
   # 测试与规范
