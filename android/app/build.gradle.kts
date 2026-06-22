@@ -1,46 +1,10 @@
-import groovy.json.JsonSlurper
 import java.util.Properties
-import java.io.File
 
 plugins {
     id("com.android.application")
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
-}
-
-repositories {
-    maven {
-        url = uri(findRustlsPlatformVerifierProject())
-        metadataSources {
-            artifact()
-            mavenPom()
-        }
-    }
-}
-
-fun findRustlsPlatformVerifierProject(): String {
-    val dependencyText = providers.exec {
-        workingDir = File(project.rootDir, "../")
-        commandLine(
-            "cargo",
-            "metadata",
-            "--format-version",
-            "1",
-            "--filter-platform",
-            "aarch64-linux-android",
-            "--manifest-path",
-            "rust/Cargo.toml",
-        )
-    }.standardOutput.asText.get()
-
-    val dependencyJson = JsonSlurper().parseText(dependencyText) as Map<*, *>
-    val packages = dependencyJson["packages"] as List<*>
-    val manifestPath = packages
-        .mapNotNull { it as? Map<*, *> }
-        .first { it["name"] == "rustls-platform-verifier-android" }["manifest_path"] as String
-
-    return File(File(manifestPath).parentFile, "maven").path
 }
 
 val keystoreProperties = Properties()
@@ -115,5 +79,4 @@ configurations.all {
 dependencies {
     // 添加核心库脱糖依赖
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
-    implementation("rustls:rustls-platform-verifier:0.1.1")
 }

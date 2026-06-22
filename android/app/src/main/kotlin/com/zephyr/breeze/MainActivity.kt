@@ -28,9 +28,6 @@ class MainActivity: FlutterFragmentActivity() {
         init {
             System.loadLibrary("windcore")
         }
-
-        @JvmStatic
-        private external fun initRustlsPlatformVerifier(context: Context)
     }
 
     private val CHANNEL = "memory_monitor"
@@ -43,7 +40,6 @@ class MainActivity: FlutterFragmentActivity() {
     private var volumeEventSink: EventChannel.EventSink? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        initRustlsPlatformVerifier(applicationContext)
         super.onCreate(savedInstanceState)
     }
 

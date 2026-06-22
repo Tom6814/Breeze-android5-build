@@ -4134,7 +4134,6 @@ dependencies = [
  "reqwest 0.12.28",
  "reqwest_dav",
  "rquickjs_playground",
- "rustls-platform-verifier",
  "serde",
  "serde-xml-rs 0.8.2",
  "serde_json",

@@ -16,4 +16,17 @@ void main() {
     expect(content.contains('force("androidx.core:core:1.16.0")'), isTrue);
     expect(content.contains('force("androidx.core:core-ktx:1.16.0")'), isTrue);
   });
+
+  test('android 21 build avoids rustls platform verifier android glue', () async {
+    final gradleContent = await File('android/app/build.gradle.kts').readAsString();
+    final activityContent = await File(
+      'android/app/src/main/kotlin/com/zephyr/breeze/MainActivity.kt',
+    ).readAsString();
+
+    expect(
+      gradleContent.contains('implementation("rustls:rustls-platform-verifier:0.1.1")'),
+      isFalse,
+    );
+    expect(activityContent.contains('initRustlsPlatformVerifier'), isFalse);
+  });
 }
