@@ -110,13 +110,13 @@ jobs:
 
       - name: Generate temporary Android release signing
         run: |
-          rm -f android/key.properties android/ci-release.keystore
+          rm -f android/key.properties android/app/ci-release.keystore
           keytool -genkeypair \
             -alias ci-release \
             -keyalg RSA \
             -keysize 2048 \
             -validity 3650 \
-            -keystore android/ci-release.keystore \
+            -keystore android/app/ci-release.keystore \
             -storetype PKCS12 \
             -storepass android \
             -keypass android \

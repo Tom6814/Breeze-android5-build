@@ -39,6 +39,7 @@ void main() {
     expect(content.contains('branches:'), isTrue);
     expect(content.contains('- main'), isTrue);
     expect(content.contains('keytool -genkeypair'), isTrue);
+    expect(content.contains('android/app/ci-release.keystore'), isTrue);
     expect(content.contains('android/key.properties'), isTrue);
     expect(content.contains('fvm dart ./script/build_apk.dart'), isTrue);
     expect(content.contains('fvm dart ./script/build_apk.dart debug'), isFalse);
