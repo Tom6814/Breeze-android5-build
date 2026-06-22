@@ -29,4 +29,19 @@ void main() {
     );
     expect(activityContent.contains('initRustlsPlatformVerifier'), isFalse);
   });
+
+  test('android 21 release workflow uses temporary signing and release build', () async {
+    final content = await File(
+      '.github/workflows/android5-jm-release.yml',
+    ).readAsString();
+
+    expect(content.contains('push:'), isTrue);
+    expect(content.contains('branches:'), isTrue);
+    expect(content.contains('- main'), isTrue);
+    expect(content.contains('keytool -genkeypair'), isTrue);
+    expect(content.contains('android/key.properties'), isTrue);
+    expect(content.contains('fvm dart ./script/build_apk.dart'), isTrue);
+    expect(content.contains('fvm dart ./script/build_apk.dart debug'), isFalse);
+    expect(content.contains('android5-jm-release-apks'), isTrue);
+  });
 }

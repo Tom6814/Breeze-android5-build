@@ -1,0 +1,140 @@
+name: Android5 JM Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-android5-jm-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /opt/hostedtoolcache /usr/share/dotnet /opt/codeql
+          sudo mkdir -p /usr/local/lib/android/sdk
+          sudo chown -R "$USER:$USER" /usr/local/lib/android
+          docker system prune -a -f || true
+          sudo apt-get clean
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-dev libclang-dev clang
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Setup Dart
+        uses: dart-lang/setup-dart@v1
+
+      - name: Setup Flutter via FVM
+        run: |
+          dart pub global activate fvm
+          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+          export PATH="$PATH:$HOME/.pub-cache/bin"
+          fvm install
+          fvm use --force
+          echo "$GITHUB_WORKSPACE/.fvm/flutter_sdk/bin" >> "$GITHUB_PATH"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Setup Rust Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust
+
+      - name: Read NDK version
+        id: ndk-config
+        run: |
+          NDK_VER=$(grep "ndkVersion" android/app/build.gradle.kts | awk -F'"' '{print $2}')
+          echo "ndk_version=$NDK_VER" >> "$GITHUB_OUTPUT"
+
+      - name: Install Android NDK
+        run: yes | sdkmanager "ndk;${{ steps.ndk-config.outputs.ndk_version }}"
+
+      - name: Install Android CMake
+        run: yes | sdkmanager "cmake;3.22.1"
+
+      - name: Set NDK env
+        run: |
+          NDK_PATH="$ANDROID_SDK_ROOT/ndk/${{ steps.ndk-config.outputs.ndk_version }}"
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: Accept Android licenses
+        run: yes | fvm flutter doctor --android-licenses || true
+
+      - name: Flutter pub get
+        run: fvm flutter pub get
+
+      - name: Prepare Android waifu2x deps
+        run: python3 script/prepare_android_waifu2x_deps.py
+
+      - name: Build Android static ncnn
+        run: python3 script/build_ncnn_static_android.py
+
+      - name: Build Android waifu2x CLI
+        run: python3 script/build_waifu2x_cli_android.py
+
+      - name: Generate temporary Android release signing
+        run: |
+          rm -f android/key.properties android/ci-release.keystore
+          keytool -genkeypair \
+            -alias ci-release \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 3650 \
+            -keystore android/ci-release.keystore \
+            -storetype PKCS12 \
+            -storepass android \
+            -keypass android \
+            -dname "CN=Breeze CI, OU=CI, O=Breeze, L=Internet, S=Internet, C=US"
+          cat > android/key.properties <<'EOF'
+          storePassword=android
+          keyPassword=android
+          keyAlias=ci-release
+          storeFile=ci-release.keystore
+          EOF
+
+      - name: Build release APK
+        run: fvm dart ./script/build_apk.dart
+
+      - name: Upload release APKs
+        uses: actions/upload-artifact@v6
+        with:
+          name: android5-jm-release-apks
+          path: |
+            build/app/outputs/flutter-apk/*.apk
+            build/app/outputs/apk/**/*.apk
