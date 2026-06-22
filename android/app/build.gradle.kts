@@ -14,7 +14,7 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.zephyr.breeze"
+    namespace = "com.tom6814.jm"
     compileSdk = 36
     ndkVersion = "29.0.14206865"
 
@@ -37,6 +37,7 @@ android {
     defaultConfig {
         // Keep Android 5 (API 21) support while avoiding Flutter's auto-migrator,
         // which rewrites literal values 16-23 to flutter.minSdkVersion (24).
+        applicationId = "com.tom6814.jm"
         minSdk = 21 + 0
         targetSdk = 36
         versionCode = flutter.versionCode

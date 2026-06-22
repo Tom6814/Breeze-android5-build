@@ -20,7 +20,7 @@ void main() {
   test('android 21 build avoids rustls platform verifier android glue', () async {
     final gradleContent = await File('android/app/build.gradle.kts').readAsString();
     final activityContent = await File(
-      'android/app/src/main/kotlin/com/zephyr/breeze/MainActivity.kt',
+      'android/app/src/main/kotlin/com/tom6814/jm/MainActivity.kt',
     ).readAsString();
 
     expect(
@@ -28,6 +28,27 @@ void main() {
       isFalse,
     );
     expect(activityContent.contains('initRustlsPlatformVerifier'), isFalse);
+  });
+
+  test('android app rename uses JM label and com.tom6814.jm package', () async {
+    final gradleContent = await File('android/app/build.gradle.kts').readAsString();
+    final manifestContent = await File(
+      'android/app/src/main/AndroidManifest.xml',
+    ).readAsString();
+    final profileManifestContent = await File(
+      'android/app/src/profile/AndroidManifest.xml',
+    ).readAsString();
+    final activityContent = await File(
+      'android/app/src/main/kotlin/com/tom6814/jm/MainActivity.kt',
+    ).readAsString();
+
+    expect(gradleContent.contains('namespace = "com.tom6814.jm"'), isTrue);
+    expect(gradleContent.contains('applicationId = "com.tom6814.jm"'), isTrue);
+    expect(gradleContent.contains('com.zephyr.breeze'), isFalse);
+    expect(manifestContent.contains('package="com.tom6814.jm"'), isTrue);
+    expect(manifestContent.contains('android:label="J M"'), isTrue);
+    expect(profileManifestContent.contains('package="com.tom6814.jm"'), isTrue);
+    expect(activityContent.contains('package com.tom6814.jm'), isTrue);
   });
 
   test('android 21 release workflow uses temporary signing and release build', () async {

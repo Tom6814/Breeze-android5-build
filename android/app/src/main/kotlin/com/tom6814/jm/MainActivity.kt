@@ -1,24 +1,24 @@
-package com.zephyr.breeze
+package com.tom6814.jm
 
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
-import android.os.Debug
 import android.os.Bundle
+import android.os.Debug
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
-import java.io.File
 import io.flutter.embedding.android.FlutterFragment
 import io.flutter.embedding.android.FlutterFragmentActivity
-import io.flutter.embedding.engine.FlutterShellArgs
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterShellArgs
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
-class MainActivity: FlutterFragmentActivity() {
+class MainActivity : FlutterFragmentActivity() {
     companion object {
         private const val TAG = "ImpellerConfig"
         private const val IMPELLER_CHANNEL = "impeller_config"
@@ -35,7 +35,7 @@ class MainActivity: FlutterFragmentActivity() {
     private val VOLUME_EVENT_CHANNEL = "volume_key_events"
     private val SYSTEM_UI_CHANNEL = "system_ui_control"
     private val REALSR_CHANNEL = "realsr_super_resolution"
-    
+
     private var volumeKeyInterceptionEnabled = false
     private var volumeEventSink: EventChannel.EventSink? = null
 
@@ -64,7 +64,7 @@ class MainActivity: FlutterFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "getMemoryInfo" -> {
@@ -89,7 +89,6 @@ class MainActivity: FlutterFragmentActivity() {
             }
         }
 
-        // 音量键拦截 MethodChannel
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, VOLUME_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "enableInterception" -> {
@@ -106,7 +105,6 @@ class MainActivity: FlutterFragmentActivity() {
             }
         }
 
-        // 音量键事件 EventChannel
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, VOLUME_EVENT_CHANNEL).setStreamHandler(
             object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -116,7 +114,7 @@ class MainActivity: FlutterFragmentActivity() {
                 override fun onCancel(arguments: Any?) {
                     volumeEventSink = null
                 }
-            }
+            },
         )
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, IMPELLER_CHANNEL).setMethodCallHandler { call, result ->
@@ -159,7 +157,13 @@ class MainActivity: FlutterFragmentActivity() {
                             val nativeLibDir = applicationInfo.nativeLibraryDir
                             val cli = File(nativeLibDir, "libwaifu2x_cli.so")
                             if (!cli.exists()) {
-                                runOnUiThread { result.error("CLI_NOT_FOUND", "libwaifu2x_cli.so not found in $nativeLibDir", null) }
+                                runOnUiThread {
+                                    result.error(
+                                        "CLI_NOT_FOUND",
+                                        "libwaifu2x_cli.so not found in $nativeLibDir",
+                                        null,
+                                    )
+                                }
                                 return@Thread
                             }
                             runOnUiThread { result.success(cli.absolutePath) }
@@ -190,11 +194,9 @@ class MainActivity: FlutterFragmentActivity() {
         val memoryInfo = ActivityManager.MemoryInfo()
         activityManager.getMemoryInfo(memoryInfo)
 
-        // 获取应用的内存使用情况
         val memoryClass = activityManager.memoryClass
         val largeMemoryClass = activityManager.largeMemoryClass
-        
-        // 获取当前进程的内存使用
+
         val runtime = Runtime.getRuntime()
         val nativeHeapSize = Debug.getNativeHeapSize()
         val nativeHeapAllocatedSize = Debug.getNativeHeapAllocatedSize()
@@ -205,36 +207,33 @@ class MainActivity: FlutterFragmentActivity() {
             "availableMemory" to memoryInfo.availMem,
             "threshold" to memoryInfo.threshold,
             "lowMemory" to if (memoryInfo.lowMemory) 1L else 0L,
-            "memoryClass" to memoryClass.toLong() * 1024 * 1024, // Convert MB to bytes
+            "memoryClass" to memoryClass.toLong() * 1024 * 1024,
             "largeMemoryClass" to largeMemoryClass.toLong() * 1024 * 1024,
             "maxMemory" to runtime.maxMemory(),
             "totalMemoryRuntime" to runtime.totalMemory(),
             "freeMemoryRuntime" to runtime.freeMemory(),
             "nativeHeapSize" to nativeHeapSize,
             "nativeHeapAllocatedSize" to nativeHeapAllocatedSize,
-            "nativeHeapFreeSize" to nativeHeapFreeSize
+            "nativeHeapFreeSize" to nativeHeapFreeSize,
         )
     }
 
     private fun getDartMemoryInfo(): Map<String, Long> {
         val runtime = Runtime.getRuntime()
-        
-        // 获取 Runtime 内存信息
+
         val maxMemory = runtime.maxMemory()
         val totalMemory = runtime.totalMemory()
         val freeMemory = runtime.freeMemory()
         val usedMemory = totalMemory - freeMemory
-        
-        // 获取进程内存信息
+
         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val processMemoryInfo = activityManager.getProcessMemoryInfo(intArrayOf(android.os.Process.myPid()))
         val pmi = if (processMemoryInfo.isNotEmpty()) processMemoryInfo[0] else null
-        
-        // 获取 Native 堆信息
+
         val nativeHeapSize = Debug.getNativeHeapSize()
         val nativeHeapAllocated = Debug.getNativeHeapAllocatedSize()
         val nativeHeapFree = Debug.getNativeHeapFreeSize()
-        
+
         return mapOf(
             "dartHeapUsed" to usedMemory,
             "dartHeapCapacity" to maxMemory,
@@ -247,9 +246,9 @@ class MainActivity: FlutterFragmentActivity() {
             "nativeHeapSize" to nativeHeapSize,
             "nativeHeapAllocated" to nativeHeapAllocated,
             "nativeHeapFree" to nativeHeapFree,
-            "processPss" to (pmi?.totalPss?.toLong()?.times(1024) ?: 0L), // Convert KB to bytes
+            "processPss" to (pmi?.totalPss?.toLong()?.times(1024) ?: 0L),
             "processPrivateDirty" to (pmi?.totalPrivateDirty?.toLong()?.times(1024) ?: 0L),
-            "processSharedDirty" to (pmi?.totalSharedDirty?.toLong()?.times(1024) ?: 0L)
+            "processSharedDirty" to (pmi?.totalSharedDirty?.toLong()?.times(1024) ?: 0L),
         )
     }
 
@@ -258,11 +257,11 @@ class MainActivity: FlutterFragmentActivity() {
             when (keyCode) {
                 KeyEvent.KEYCODE_VOLUME_DOWN -> {
                     volumeEventSink?.success("volume_down")
-                    return true // 拦截事件
+                    return true
                 }
                 KeyEvent.KEYCODE_VOLUME_UP -> {
                     volumeEventSink?.success("volume_up")
-                    return true // 拦截事件
+                    return true
                 }
             }
         }
@@ -293,15 +292,15 @@ class MainActivity: FlutterFragmentActivity() {
     private fun fallbackSystemUiVisibility(immersive: Boolean) {
         var flags = (
             View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-        )
+                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            )
         if (immersive) {
             flags = flags or (
                 View.SYSTEM_UI_FLAG_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_IMMERSIVE
-            )
+                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    or View.SYSTEM_UI_FLAG_IMMERSIVE
+                )
         }
         window.decorView.systemUiVisibility = flags
     }
